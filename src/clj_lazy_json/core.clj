@@ -133,7 +133,7 @@
   options and the path language. See the docstring on consume-json for
   a description of the basic behaviour implemented."
   [opts paths-and-callbacks]
-  (let [{:keys [all-matching cut-subtrees] :or {:all-matching true}} opts
+  (let [{:keys [all-matching cut-subtrees] :or {all-matching true}} opts
         call-callbacks (if all-matching
                          (fn call-all-callbacks [a json path]
                            (when-let [callbacks (seq (keep #(get-in a [% ::here])
