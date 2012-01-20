@@ -221,6 +221,7 @@
     [:$] {\"foo\" [1], \"bar\" [2]}
     [:$ \"foo\"] [1]
     \"This is particularly interesting:\" [:$ \"foo\" 0] 1
+    [:$ \"foo\" 0] 1
     [:$ \"bar\"] [2]
     [:$ \"bar\" 0] 2"
   [name docstring? opts? & paths-and-callbacks]
