@@ -65,3 +65,14 @@
 (deftest test-accumulating-processor
   (accumulating-processor (core/parse-string "{\"foo\": 1, \"bar\": 2}"))
   (is (== @a 3)))
+
+(def b (atom 0))
+
+(core/define-json-processor all-matching-accumulating-processor
+  [:$ :*] (fn [_ n] (swap! b + n))
+  [:$ "foo"] (fn [_ _] (swap! b inc)))
+
+(deftest test-all-matching-accumulating-processor
+  (all-matching-accumulating-processor
+   (core/parse-string "{\"foo\": 1, \"bar\": 2}"))
+  (is (== @b 4)))
