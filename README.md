@@ -11,14 +11,26 @@ this library is subject to change without notice.
 
 ## Usage
 
-JSON documents can be parsed into a lazy tree representation by the
-`lazy-parse` function, which expects as its argument anything
-acceptable to `clojure.java.io/reader` (e.g. a `File`, `URI` or a
-ready-made `Reader`). `parse-string` is a convenience wrapper for
-dealing with JSON documents contained in strings.
+### Overview
 
-The trees are meant to be processed by calling callback functions
-registered for "paths"; for example
+`clj-lazy-json` defines a lazy tree representation for JSON documents
+and a method of processing JSON documents so represented. The latter
+is based on a query / path specification language for matching nodes
+in a JSON document (vaguely resembling -- simplified -- XQuery, CSS
+selectors and the like); a `define-json-processor` macro allows one to
+package a handful of paths together with appropriate callbacks in a
+regular Clojure function which can then be used to process JSON
+documents.
+
+JSON text can be parsed into the lazy tree form by the `lazy-parse`
+function, which can be called on anything acceptable to
+`clojure.java.io/reader` (e.g. a `File`, `URI` or a ready-made
+`Reader`). `parse-string` is a convenience wrapper for dealing with
+JSON documents contained in strings.
+
+During development, rather than defining named JSON processing
+functions, it may be convenient to use the `process-lazy-json-tree`
+function; for example
 
     (process-lazy-json-tree (parse-string "{\"foo\": 1, \"bar\": 2}")
                             {}
@@ -30,12 +42,14 @@ prints
     "Foo!" [:$ "foo"] 1
     "Bar!" [:$ "bar"] 2
 
-and returns `nil`.
+and returns `nil`. To achieve the same effect with a named processor,
+one would say
 
-The `process-lazy-json-tree` function used in the example above
-constructs a one-off JSON processor and uses it to process the given
-lazy JSON tree. JSON processors which will be used repeatedly may be
-defined using the `define-json-processor` macro.
+    (define-json-processor foo-bar-processor
+      [:$ "foo"] #(apply prn "Foo!" %&)
+      [:$ "bar"] #(apply prn "Bar!" %&))
+
+    (foo-bar-processor (parse-string "{\"foo\": 1, \"bar\": 2}"))
 
 Wildcards matching "any key/index" (`:*`) or "any subpath" (`:**`) are
 supported in paths. The docstring of the `define-json-processor` macro
@@ -47,6 +61,69 @@ representation using the `to-clj` function.
 
 Note that no JSON emitting functionality is currently supported; this
 is available in both `clojure.data.json` and `clj-json`.
+
+### Example
+
+Let's have a look at an example. First, a simple JSON document:
+
+    (def test-json
+      "{\"foo\": [{\"bar\": 1}, {\"foo\": {\"quux\": {\"bar\": 2}}}],
+        \"bar\": [3]}")
+
+Suppose we want to call some function with the values attached to bars
+below at least one foo. We'll use the following callback function:
+
+    (defn print-value-callback [_ v] (prn v))
+
+To demonstrate the use of a callback's first argument, we'll also call
+a function to print out its value at a different path. This function
+is defined inline in the parser specification below, just to show it's
+possible.
+
+    (define-json-processor example-processor
+      "Print out the values attached to bars below at least one foo."
+      [:** "foo" :** "bar"] print-value-callback
+      [:$ "bar" :*] (fn print-path [path _] (prn path)))
+
+Here `example-processor` is a regular Clojure function. It takes one
+argument named `lazy-json-tree` and has the specified docstring
+attached. To test it out on our example document, one would say
+
+    (example-processor (parse-string test-json))
+    1
+    2
+    2
+    [:$ "bar" 0]
+    ; nil
+
+The `2` is printed twice, because its position in the tree matches the
+first path in two ways (see below for details).
+
+The DSL used to define `example-processor` breaks down as follows:
+
+    [:** "foo" :** "bar"] print-value
+    ; <----- path ----->  <callback>
+    ; ^- :** -- skip any (possibly empty) subpath
+    ;    ^- "foo" -- expect to see an object; descend into the value
+    ;                attached to key "foo"
+    ;          ^- :** -- skip any subpath
+    ;              ^- "bar" -- descend at key "bar"; this is the end
+    ;                          of the path spec, so call the attached
+    ;                          callback -- print-value -- with the
+    ;                          current node
+
+    [:$ "bar" :*] (fn print-path [path _] (prn path))
+    ; ^- match document root
+    ;   ^- expect previously matched element (= root) to be an object;
+    ;      follow key "bar"
+    ;         ^- expect to see an object or an array; call the callback
+    ;            for all children (:* matches any single step in the path)
+
+The callbacks receive two arguments: the exact path to the current
+node in the JSON document, which is a vector of `:$` possibly followed
+by strings (object keys) and numbers (array indices), and a standard
+"Clojurized" representation of the node's value (with objects
+converted to maps and arrays to vectors).
 
 ## Use of `clojure.data.xml` code
 
