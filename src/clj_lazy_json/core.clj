@@ -39,13 +39,48 @@
         (recur (.nextToken parser))))))
 
 ;;; adapted from clojure.data.xml
-(defn lazy-source-seq
-  "Returns a seq of parse events for the given source."
-  ([source]         (lazy-source-seq source factory))
-  ([source factory] (lazy-source-seq source factory Integer/MAX_VALUE))
+(defn queued-source-seq
+  "Returns a seq of parse events for the given source. Queue-backed variant."
+  ([source]         (queued-source-seq source factory))
+  ([source factory] (queued-source-seq source factory Integer/MAX_VALUE))
   ([source factory queue-size]
      (fill-queue (partial fill-from-jackson (.createJsonParser factory source))
                  :queue-size queue-size)))
+
+(defn lazy-source-seq
+  "Returns a seq of parse events for the given source."
+  ([source] (lazy-source-seq source factory))
+  ([source factory]
+     (let [parser (.createJsonParser factory source)
+
+           token->event
+           (fn token->event [token]
+             (condp = token
+               JsonToken/START_OBJECT  (event :start-object)
+               JsonToken/END_OBJECT    (event :end-object)
+               JsonToken/START_ARRAY   (event :start-array)
+               JsonToken/END_ARRAY     (event :end-array)
+               JsonToken/FIELD_NAME    (event :field-name (.getCurrentName parser))
+               JsonToken/NOT_AVAILABLE (event :not-available)
+               JsonToken/VALUE_EMBEDDED_OBJECT (event :value-embedded-object) ; ?
+               JsonToken/VALUE_FALSE   (event :atom false)
+               JsonToken/VALUE_TRUE    (event :atom true)
+               JsonToken/VALUE_NULL    (event :atom nil)
+               JsonToken/VALUE_NUMBER_FLOAT (event :atom (.getNumberValue parser))
+               JsonToken/VALUE_NUMBER_INT   (event :atom (.getNumberValue parser))
+               JsonToken/VALUE_STRING       (event :atom (.getText parser))
+               (throw (RuntimeException.
+                       (str "Missed a token type in lazy-source-seq: "
+                            token)))))
+
+           token-seq
+           (fn token-seq []
+             (lazy-seq
+              (when-let [token (.nextToken parser)]
+                (cons (token->event token)
+                      (token-seq)))))]
+
+       (token-seq))))
 
 ;;; adapted from clojure.data.xml
 (defn event-tree
@@ -71,6 +106,16 @@
     events)))
 
 ;;; adapted from clojure.data.xml
+(defn queued-parse
+  "Obtains a Reader on source using clojure.java.io/reader and parses
+  the result into a lazy JSON tree. Queue-backed variant."
+  [source]
+  (-> source
+      io/reader
+      lazy-source-seq
+      event-tree))
+
+;;; adapted from clojure.data.xml
 (defn lazy-parse
   "Obtains a Reader on source using clojure.java.io/reader and parses
   the result into a lazy JSON tree."
@@ -79,6 +124,11 @@
       io/reader
       lazy-source-seq
       event-tree))
+
+(defn queued-parse-string
+  "Parses the given string into a lazy JSON tree. Queue-backed variant."
+  [s]
+  (-> s java.io.StringReader. queued-parse))
 
 (defn parse-string
   "Parses the given string into a lazy JSON tree."

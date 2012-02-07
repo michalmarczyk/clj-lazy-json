@@ -26,7 +26,11 @@ JSON text can be parsed into the lazy tree form by the `lazy-parse`
 function, which can be called on anything acceptable to
 `clojure.java.io/reader` (e.g. a `File`, `URI` or a ready-made
 `Reader`). `parse-string` is a convenience wrapper for dealing with
-JSON documents contained in strings.
+JSON documents contained in strings. These functions, as well as the
+underlying `lazy-source-seq` function, operate on simple Clojure lazy
+seqs. Queue-backed variants using code from `clojure.data.xml` are
+also available, see `queued-parse`, `queud-parse-string` and
+`queued-source-seq`.
 
 During development, rather than defining named JSON processing
 functions, it may be convenient to use the `process-lazy-json-tree`
