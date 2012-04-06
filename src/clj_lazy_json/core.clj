@@ -44,14 +44,14 @@
   ([source]         (queued-source-seq source factory))
   ([source factory] (queued-source-seq source factory Integer/MAX_VALUE))
   ([source factory queue-size]
-     (fill-queue (partial fill-from-jackson (.createJsonParser factory source))
+     (fill-queue (partial fill-from-jackson (.createJsonParser ^JsonFactory factory (io/reader source)))
                  :queue-size queue-size)))
 
 (defn lazy-source-seq
   "Returns a seq of parse events for the given source."
   ([source] (lazy-source-seq source factory))
   ([source factory]
-     (let [parser (.createJsonParser factory source)
+     (let [parser (.createJsonParser ^JsonFactory factory (io/reader source))
 
            token->event
            (fn token->event [token]
