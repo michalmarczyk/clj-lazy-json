@@ -5,14 +5,12 @@
 (deftest basic-parse-test
   (let [json-str "{\"foo\": [1, 2], \"bar\": [null, true, false]}"
         m {"foo" [1 2]
-           "bar" [nil true false]}]
-    (is (= m (core/to-clj (core/parse-string json-str))))))
-
-(deftest basic-queued-parse-test
-  (let [json-str "{\"foo\": [1, 2], \"bar\": [null, true, false]}"
-        m {"foo" [1 2]
-           "bar" [nil true false]}]
-    (is (= m (core/to-clj (core/queued-parse-string json-str))))))
+           "bar" [nil true false]}
+        clj (atom nil)]
+    (core/process-json (core/parse-string json-str)
+                       {}
+                       [:$] (fn [_ datum] (reset! clj datum)))
+    (is (= m @clj))))
 
 (defn counting-string-reader
   "Returns a StringReader on s augmented with a counter of characters
@@ -52,22 +50,18 @@
                                                   (str "\"quux" i "\": "
                                                        test-json-string-1 ", "))
                                                 ["\"baz\": null}"]))
-        test-json-reader (counting-string-reader test-json-string)
-        test-json-reader-for-queued-parser (counting-string-reader
-                                            test-json-string)]
+        test-json-reader (counting-string-reader test-json-string)]
     (are [p] (thrown-with-msg? RuntimeException #"^stop here$"
-               (core/process-lazy-json-tree
+               (core/process-json
                 p
                 {}
                 [:$ "quux2" "foo3"]
                 (fn [_ _] (throw (RuntimeException. "stop here")))))
-         (core/lazy-parse test-json-reader)
-         (core/queued-parse test-json-reader-for-queued-parser))
+         (core/parse test-json-reader))
     ;; sanity check / silly typo avoidance:
     (is (< (* 100 (count test-json-string-1)) (count test-json-string)))
     (are [r] (<= @r (* 4 (count test-json-string-1)))
-         test-json-reader
-         test-json-reader-for-queued-parser)))
+         test-json-reader)))
 
 (def a (atom 0))
 

@@ -13,33 +13,29 @@ this library is subject to change without notice.
 
 ### Overview
 
-`clj-lazy-json` defines a lazy tree representation for JSON documents
-and a method of processing JSON documents so represented. The latter
-is based on a query / path specification language for matching nodes
-in a JSON document (vaguely resembling -- simplified -- XQuery, CSS
-selectors and the like); a `define-json-processor` macro allows one to
-package a handful of paths together with appropriate callbacks in a
-regular Clojure function which can then be used to process JSON
-documents.
+`clj-lazy-json` provides a Clojure wrapper for Jackson's stream --
+parse event-based -- API and a method of processing seqs parse event.
+The latter is based on a query / path specification language for
+matching nodes in a JSON document (vaguely resembling -- simplified --
+XQuery, CSS selectors and the like); a `define-json-processor` macro
+allows one to package a handful of paths together with appropriate
+callbacks in a regular Clojure function which can then be used to
+process JSON documents.
 
-JSON text can be parsed into the lazy tree form by the `lazy-parse`
+JSON text can be parsed into a parse event seq by the `parse`
 function, which can be called on anything acceptable to
 `clojure.java.io/reader` (e.g. a `File`, `URI` or a ready-made
 `Reader`). `parse-string` is a convenience wrapper for dealing with
-JSON documents contained in strings. These functions, as well as the
-underlying `lazy-source-seq` function, operate on simple Clojure lazy
-seqs. Queue-backed variants using code from `clojure.data.xml` are
-also available, see `queued-parse`, `queud-parse-string` and
-`queued-source-seq`.
+JSON documents contained in strings.
 
 During development, rather than defining named JSON processing
-functions, it may be convenient to use the `process-lazy-json-tree`
+functions, it may be convenient to use the `process-json`
 function; for example
 
-    (process-lazy-json-tree (parse-string "{\"foo\": 1, \"bar\": 2}")
-                            {}
-                            [:$ "foo"] #(apply prn "Foo!" %&)
-                            [:$ "bar"] #(apply prn "Bar!" %&))
+    (process-json (parse-string "{\"foo\": 1, \"bar\": 2}")
+                  {}
+                  [:$ "foo"] #(apply prn "Foo!" %&)
+                  [:$ "bar"] #(apply prn "Bar!" %&))
 
 prints
 
@@ -59,9 +55,6 @@ Wildcards matching "any key/index" (`:*`) or "any subpath" (`:**`) are
 supported in paths. The docstring of the `define-json-processor` macro
 contains a description of the path language and the contract which
 must be met by the callback functions.
-
-The lazy JSON trees may be converted to the usual "natural" Clojure
-representation using the `to-clj` function.
 
 Note that no JSON emitting functionality is currently supported; this
 is available in both `clojure.data.json` and `clj-json`.

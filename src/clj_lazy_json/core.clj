@@ -9,10 +9,10 @@
 
 (defrecord Event [type contents])
 
-(defn event [type & [contents]]
+(defn ^:private event [type & [contents]]
   (Event. type contents))
 
-(defn fill-from-jackson
+(defn ^:private fill-from-jackson
   "Filler function for use with fill-queue and Jackson."
   [^JsonParser parser fill]
   (letfn [(offer [type & [contents]]
@@ -38,18 +38,9 @@
                        token))))
         (recur (.nextToken parser))))))
 
-;;; adapted from clojure.data.xml
-(defn queued-source-seq
-  "Returns a seq of parse events for the given source. Queue-backed variant."
-  ([source]         (queued-source-seq source factory))
-  ([source factory] (queued-source-seq source factory Integer/MAX_VALUE))
-  ([source factory queue-size]
-     (fill-queue (partial fill-from-jackson (.createJsonParser ^JsonFactory factory (io/reader source)))
-                 :queue-size queue-size)))
-
-(defn lazy-source-seq
+(defn parse
   "Returns a seq of parse events for the given source."
-  ([source] (lazy-source-seq source factory))
+  ([source] (parse source factory))
   ([source factory]
      (let [parser (.createJsonParser ^JsonFactory factory (io/reader source))
 
@@ -83,7 +74,7 @@
        (token-seq))))
 
 ;;; adapted from clojure.data.xml
-(defn event-tree
+(defn ^:private event-tree
   "Returns a lazy tree of :object, :array and :atom nodes for the
   given seq of events."
   [events]
@@ -102,150 +93,129 @@
       (or (= :end-object (:type event))
           (= :end-array  (:type event))))
     (fn [^Event event]
-      {:type (:type event) :value (:contents event)})
+      {:type (:type event) :contents (:contents event)})
     events)))
 
-;;; adapted from clojure.data.xml
-(defn queued-parse
-  "Obtains a Reader on source using clojure.java.io/reader and parses
-  the result into a lazy JSON tree. Queue-backed variant."
-  [source]
-  (-> source
-      io/reader
-      lazy-source-seq
-      event-tree))
+(defn ^:private skip-object [events lvl]
+  (lazy-seq
+    (if-not (zero? lvl)
+      (when-first [e events]
+        (case (:type e)
+          :end-object (cons e (skip-object (next events) (dec lvl)))
+          :start-object (cons e (skip-object (next events) (inc lvl)))
+          (cons e (skip-object (next events) lvl)))))))
 
-;;; adapted from clojure.data.xml
-(defn lazy-parse
-  "Obtains a Reader on source using clojure.java.io/reader and parses
-  the result into a lazy JSON tree."
-  [source]
-  (-> source
-      io/reader
-      lazy-source-seq
-      event-tree))
+(defn ^:private skip-array [events lvl]
+  (lazy-seq
+    (if-not (zero? lvl)
+      (when-first [e events]
+        (case (:type e)
+          :end-array (cons e (skip-array (next events) (dec lvl)))
+          :start-array (cons e (skip-array (next events) (inc lvl)))
+          (cons e (skip-array (next events) lvl)))))))
 
-(defn queued-parse-string
-  "Parses the given string into a lazy JSON tree. Queue-backed variant."
-  [s]
-  (-> s java.io.StringReader. queued-parse))
+(defn ^:private to-tree [events]
+  (when-first [e events]
+    (case (:type e)
+      :start-object (event-tree (cons e (skip-object (next events) 1)))
+      :start-array  (event-tree (cons e (skip-array (next events) 1)))
+      e)))
 
 (defn parse-string
-  "Parses the given string into a lazy JSON tree."
+  "Parses the JSON document contained in the string s into a seq of parse events."
   [s]
-  (-> s java.io.StringReader. lazy-parse))
+  (-> s java.io.StringReader. parse))
 
-(defn object?
-  "Checks whether x looks like a lazy JSON object."
-  [x]
-  (and (map? x) (= :object (:type x))))
-
-(defn array?
-  "Checks whether x looks like a lazy JSON array."
-  [x]
-  (and (map? x) (= :array (:type x))))
-
-(defn to-clj
+(defn ^:private to-clj
   "Converts a lazy JSON tree to the natural Clojure representation."
   [json]
   (case (:type json)
-    (:atom :field-name) (:value json)
+    (:atom :field-name) (:contents json)
     :array              (vec (map to-clj (:entries json)))
     :object             (into {} (map (fn [[k v]]
                                         [(to-clj k) (to-clj v)])
                                       (:entries json)))))
 
-(defn consume-json
-  "Calls (f json path), where json should be a lazy JSON tree
-  representing a node in a JSON document being processed and path
-  should describe its location in the document. See
-  define-json-processor's docstring for a description of the path
-  language.
-
-  If (f json path) returns a truthy value g and json is a compound
-  datum (a JSON object or array), then json's children will be
-  recursively consumed using g (which is assumed to be a function). In
-  any case, nil is returned."
-  [f json path]
-  (when-let [g (f json path)]
-    (case (:type json)
-      :object (dorun (map (fn [[k v]]
-                            (consume-json g v (conj path (:value k))))
-                          (:entries json)))
-      :array  (dorun (map-indexed (fn [i v]
-                                    (consume-json g v (conj path i)))
-                                  (:entries json)))
-      nil)))
-
 (defn build-automaton
-  "Used internally by process-lazy-json-tree and define-json-processor.
+  "Used internally by process-json and define-json-processor.
   See the docstring on the latter for a description of the supported
   options and the path language. See the docstring on consume-json for
   a description of the basic behaviour implemented."
   [opts paths-and-callbacks]
-  (let [{:keys [all-matching cut-subtrees] :or {all-matching true}} opts
-        call-callbacks (if all-matching
-                         (fn call-all-callbacks [a json path]
-                           (when-let [callbacks (seq (keep #(get-in a [% ::here])
-                                                           [(peek path) :* :**]))]
-                             (doseq [callback callbacks]
-                               (callback path (to-clj json)))
-                             true))
-                         (fn call-most-specific-callbacks [a json path]
-                           (when-let [callback (some #(get-in a [% ::here])
-                                                     [(peek path) :* :**])]
-                             (callback path (to-clj json))
-                             true)))]
-    (loop [a {} pcs paths-and-callbacks]
-      (if-let [[path callback] (first pcs)]
-        (recur (assoc-in a (conj path ::here) callback)
-               (next pcs))
-        (letfn [(merge-pcs [left right]
-                  (if (map? left)
-                    (merge-with merge-pcs left right)
-                    (fn [path json] (left path json) (right path json))))
-                (automaton [a json path]
-                  (when-not (and (call-callbacks a json path) cut-subtrees)
-                    (partial automaton
-                             (merge-with merge-pcs
-                                         (get a (peek path))
-                                         (get a :*)
-                                         (when-let [starstar (get a :**)]
-                                           (merge-with merge-pcs
-                                                       starstar
-                                                       {:** starstar}))))))]
-          (partial automaton a))))))
+  (loop [a {} pcs paths-and-callbacks]
+    (if-let [[path callback] (first pcs)]
+      (recur (assoc-in a (conj path ::here) callback)
+             (next pcs))
+      a)))
 
-(defn process-lazy-json-tree
-  "Processes the given lazy JSON tree using a one-off processor. See
-  the docstring on define-json-processor for more information.
+(defn ^:private step-automaton [automaton path]
+  (letfn [(merge-pcs [left right]
+            (if (map? left)
+              (merge-with merge-pcs left right)
+              (fn [path json] (left path json) (right path json))))]
+    (merge-with merge-pcs
+                (get automaton (peek path))
+                (get automaton :*)
+                (when-let [starstar (get automaton :**)]
+                  (merge-with merge-pcs
+                              starstar
+                              {:** starstar})))))
 
-  Example:
+(defn ^:private call-callbacks [automaton path events]
+  (when-let [callback (get automaton ::here)]
+    (let [datum (to-clj (to-tree events))]
+      (callback path datum))
+    true))
 
-    (process-lazy-json-tree (-> \"{\\\"foo\\\": 1, \\\"bar\\\": 2}\"
-                                parse-string)
-                            {}
-                            [:**] prn)"
-  [lazy-json-tree opts & paths-and-callbacks]
+(defn consume-json
+  "Used internally by process-json and define-json-processor."
+  [automaton events path]
+  (letfn [(go [as path events]
+            (when-first [e events]
+              (let [path (if (number? (peek path))
+                           (conj (pop path) (inc (peek path)))
+                           path)]
+                (case (:type e)
+                  (:end-array :end-object)
+                  (recur (pop as) (pop path) (next events))
+
+                  :start-array
+                  (do (call-callbacks (peek as) path events)
+                      (let [new-path (conj path -1)
+                            new-a    (step-automaton (peek as) new-path)]
+                        (recur (conj as new-a) new-path (next events))))
+
+                  :start-object
+                  (do (call-callbacks (peek as) path events)
+                      (recur (conj as nil) (conj path nil) (next events)))
+
+                  :field-name
+                  (let [new-path (conj (pop path) (:contents e))
+                        new-a    (step-automaton (peek (pop as)) new-path)]
+                    (recur (conj (pop as) new-a) new-path (next events)))
+
+                  :atom
+                  (do (call-callbacks (peek as) path events)
+                      (recur as path (next events)))))))]
+    (go [(step-automaton automaton path)] path events)))
+
+(defn process-json
+  "Constructs a one-off JSON processor and uses it to process parsed-json.
+  See docstring on define-json-processor for processor definition
+  syntax and supported options."
+  [parsed-json opts & paths-and-callbacks]
   (consume-json (build-automaton opts (map vec (partition 2 paths-and-callbacks)))
-                lazy-json-tree
+                parsed-json
                 [:$]))
 
 (defmacro define-json-processor
   "Defines a function of the given name and, optionally, with the
-  given docstring, which takes a single argument, a lazy tree
-  describing a JSON datum, and processes it lazily in accordance with
+  given docstring, which takes a single argument, a seq of parse
+  events describing a JSON datum (as output by the parse and
+  parse-string functions), and processes it lazily in accordance with
   the given specification.
 
-  The optional opts? map currently supports the following keys:
-    :all-matching (default: true): Call all callbacks registered for
-      matching paths; if set to false, more specific callbacks take
-      precedence. Specificity is currently determined by the last
-      component of the path; any concrete value is more specific
-      than :*, which is more specific than :**.
-    :cut-subtrees (default: false): Do not process separately any
-      nodes in subtrees starting at nodes for which callbacks have
-      already been called.
+  Options are currently ignored.
 
   Paths are specified using the following language:
     :$ matches the root datum only;
@@ -288,5 +258,5 @@
                               (concat [docstring? opts?] paths-and-callbacks))
         paths-and-callbacks (vec (map vec (partition 2 paths-and-callbacks)))]
     `(let [automaton# (build-automaton ~opts ~paths-and-callbacks)]
-       (defn ~name ~@(when docstring [docstring]) [~'lazy-json-tree]
-         (consume-json automaton# ~'lazy-json-tree [:$])))))
+       (defn ~name ~@(when docstring [docstring]) [~'parsed-json]
+         (consume-json automaton# ~'parsed-json [:$])))))
